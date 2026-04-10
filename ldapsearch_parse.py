@@ -1,5 +1,26 @@
 import argparse
+import base64
 import sys
+
+FIELDS = {
+    "sAMAccountName": "username",
+    "userPrincipalName": "upn",
+    "displayName": "name",
+    "description": "description",
+}
+
+def _extract_value(line):
+    """Handle both plain (attr: val) and base64-encoded (attr:: val) LDIF values."""
+    attr, sep, value = line.partition(":")
+    value = value.lstrip()
+    if value.startswith(":"):
+        # base64-encoded value (double colon)
+        raw = value[1:].strip()
+        try:
+            return base64.b64decode(raw).decode("utf-8", errors="replace")
+        except Exception:
+            return raw
+    return value
 
 def parse_ldap_users(input_text):
     users = []
@@ -8,23 +29,22 @@ def parse_ldap_users(input_text):
     for line in input_text.splitlines():
         line = line.strip()
 
-        if line.startswith("sAMAccountName:"):
-            current_user["username"] = line.split(":", 1)[1].strip()
-
-        elif line.startswith("userPrincipalName:"):
-            current_user["upn"] = line.split(":", 1)[1].strip()
-
-        elif line.startswith("displayName:"):
-            current_user["name"] = line.split(":", 1)[1].strip()
-
-        elif line.startswith("description:"):
-            current_user["description"] = line.split(":", 1)[1].strip()
-
-        # When we hit a new entry, save the previous one
-        elif line.startswith("# ") and current_user:
-            if "username" in current_user:
+        # Blank line or new comment block = end of current entry
+        if line == "" or line.startswith("# "):
+            if current_user and "username" in current_user:
                 users.append(current_user)
-            current_user = {}
+                current_user = {}
+            elif line.startswith("# "):
+                current_user = {}
+            continue
+
+        # Skip LDIF metadata lines
+        if line.startswith("dn:") or line.startswith("search:") or line.startswith("result:"):
+            continue
+
+        attr = line.split(":")[0]
+        if attr in FIELDS:
+            current_user[FIELDS[attr]] = _extract_value(line)
 
     # Save the last entry
     if "username" in current_user:
