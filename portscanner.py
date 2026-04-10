@@ -18,24 +18,33 @@ import sys
 import time
 
 
-async def probe(host: str, port: int, timeout: float, sem: asyncio.Semaphore):
-    async with sem:
-        try:
-            fut = asyncio.open_connection(host, port)
-            reader, writer = await asyncio.wait_for(fut, timeout=timeout)
-            writer.close()
+async def probe(host: str, port: int, timeout: float, sem: asyncio.Semaphore,
+                retries: int = 2):
+    for attempt in range(1 + retries):
+        async with sem:
             try:
-                await writer.wait_closed()
-            except Exception:
-                pass
-            return port
-        except (asyncio.TimeoutError, ConnectionRefusedError, OSError):
-            return None
+                fut = asyncio.open_connection(host, port)
+                reader, writer = await asyncio.wait_for(fut, timeout=timeout)
+                writer.close()
+                try:
+                    await writer.wait_closed()
+                except Exception:
+                    pass
+                return port
+            except ConnectionRefusedError:
+                return None
+            except (asyncio.TimeoutError, OSError):
+                if attempt < retries:
+                    await asyncio.sleep(0.2 * (attempt + 1))
+                    continue
+                return None
 
 
-async def fast_sweep(host: str, ports, concurrency: int, timeout: float):
+async def fast_sweep(host: str, ports, concurrency: int, timeout: float,
+                     retries: int = 2):
     sem = asyncio.Semaphore(concurrency)
-    tasks = [asyncio.create_task(probe(host, p, timeout, sem)) for p in ports]
+    tasks = [asyncio.create_task(probe(host, p, timeout, sem, retries=retries))
+             for p in ports]
     open_ports = []
     total = len(tasks)
     done = 0
@@ -83,17 +92,21 @@ def main():
     ap.add_argument("--ports", default="1-65535", help="Port spec, e.g. 1-65535 or 22,80,443")
     ap.add_argument("--concurrency", type=int, default=2000, help="Parallel sockets")
     ap.add_argument("--timeout", type=float, default=1.0, help="Per-port timeout (s)")
+    ap.add_argument("--retries", type=int, default=2,
+                    help="Per-port retries on timeout/error (0 to disable)")
     ap.add_argument("--nmap-args", default="-sV -sC -Pn -T4",
                     help="Flags passed to nmap for the deep scan")
     args = ap.parse_args()
 
     ports = parse_ports(args.ports)
     print(f"[*] Stage 1: fast sweep of {len(ports)} ports on {args.target} "
-          f"(concurrency={args.concurrency}, timeout={args.timeout}s)")
+          f"(concurrency={args.concurrency}, timeout={args.timeout}s, "
+          f"retries={args.retries})")
     t0 = time.time()
     try:
         open_ports = asyncio.run(
-            fast_sweep(args.target, ports, args.concurrency, args.timeout)
+            fast_sweep(args.target, ports, args.concurrency, args.timeout,
+                       args.retries)
         )
     except KeyboardInterrupt:
         print("\n[!] Aborted.")

@@ -1,3 +1,4 @@
+import argparse
 import sys
 
 def parse_ldap_users(input_text):
@@ -33,16 +34,31 @@ def parse_ldap_users(input_text):
 
 
 def main():
+    ap = argparse.ArgumentParser(description="Parse ldapsearch output into a user table or wordlist.")
+    ap.add_argument("-w", "--wordlist", action="store_true",
+                    help="Output usernames only, one per line (wordlist mode)")
+    ap.add_argument("-o", "--output", help="Write output to file instead of stdout")
+    args = ap.parse_args()
+
     input_text = sys.stdin.read()
     users = parse_ldap_users(input_text)
 
-    print(f"{'Username':<25} {'Full Name':<25} {'Notes'}")
-    print("-" * 80)
-    for u in users:
-        username = u.get("username", "")
-        name = u.get("name", "")
-        desc = u.get("description", "")
-        print(f"{username:<25} {name:<25} {desc}")
+    out = open(args.output, "w") if args.output else sys.stdout
+
+    if args.wordlist:
+        for u in users:
+            print(u.get("username", ""), file=out)
+    else:
+        print(f"{'Username':<25} {'Full Name':<25} {'Notes'}", file=out)
+        print("-" * 80, file=out)
+        for u in users:
+            username = u.get("username", "")
+            name = u.get("name", "")
+            desc = u.get("description", "")
+            print(f"{username:<25} {name:<25} {desc}", file=out)
+
+    if args.output:
+        out.close()
 
 
 if __name__ == "__main__":
